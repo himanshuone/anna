@@ -1,5 +1,5 @@
 {
-  "name": "Intent Gate",
+  "name": "Phone Detox",
   "description": "A strict phone-use curbing application that intercepts non-essential apps via a monochrome, offline-first intent gate overlay with delay penalties.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]

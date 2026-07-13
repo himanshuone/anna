@@ -3,7 +3,6 @@ package com.example
 import android.app.Activity
 import android.content.Intent
 import android.os.Bundle
-import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.BorderStroke
@@ -23,8 +22,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.util.Log
+import androidx.activity.compose.BackHandler
 import com.example.data.AppDatabase
 import com.example.data.AppState
+import com.example.data.UserStats
+import com.example.ui.theme.MyApplicationTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -32,17 +35,24 @@ class BlockerActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        window.setBackgroundDrawableResource(android.R.color.transparent)
 
         val targetPackage = intent.getStringExtra("TARGET_PACKAGE") ?: "Unknown App"
 
         setContent {
-            BlockerScreen(
-                targetPackage = targetPackage,
-                onDismiss = {
-                    finish()
+            MyApplicationTheme {
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = Color.Black
+                ) {
+                    BlockerScreen(
+                        modifier = Modifier.fillMaxSize(),
+                        targetPackage = targetPackage,
+                        onDismiss = {
+                            finish()
+                        }
+                    )
                 }
-            )
+            }
         }
     }
 
@@ -64,6 +74,7 @@ enum class BlockerState {
 
 @Composable
 fun BlockerScreen(
+    modifier: Modifier = Modifier,
     targetPackage: String,
     onDismiss: () -> Unit
 ) {
@@ -74,6 +85,49 @@ fun BlockerScreen(
 
     var screenState by remember { mutableStateOf(BlockerState.LOADING) }
     var penaltySecondsLeft by remember { mutableStateOf(20) }
+
+    fun recordDeferralAndExit() {
+        coroutineScope.launch {
+            try {
+                val state = dao.getAppState(targetPackage) ?: AppState(packageName = targetPackage)
+                val newState = state.copy(
+                    deferralCount = state.deferralCount + 1,
+                    lastInteractedTime = System.currentTimeMillis()
+                )
+                dao.insertAppState(newState)
+
+                val statsDao = db.userStatsDao()
+                val stats = statsDao.getUserStats() ?: com.example.data.UserStats()
+                
+                val sdf = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+                val today = sdf.format(java.util.Date())
+                
+                val cal = java.util.Calendar.getInstance()
+                cal.add(java.util.Calendar.DATE, -1)
+                val yesterday = sdf.format(cal.time)
+
+                val newStreak = when (stats.lastActiveDate) {
+                    today -> stats.dailyStreak
+                    yesterday -> stats.dailyStreak + 1
+                    else -> 1
+                }
+                statsDao.insertUserStats(com.example.data.UserStats(dailyStreak = newStreak, lastActiveDate = today))
+            } catch (e: Exception) {
+                Log.e("BlockerActivity", "Error recording deferral: ${e.message}", e)
+            } finally {
+                val homeIntent = Intent(Intent.ACTION_MAIN).apply {
+                    addCategory(Intent.CATEGORY_HOME)
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                }
+                context.startActivity(homeIntent)
+                onDismiss()
+            }
+        }
+    }
+
+    BackHandler {
+        recordDeferralAndExit()
+    }
 
     LaunchedEffect(targetPackage) {
         val state = dao.getAppState(targetPackage)
@@ -104,54 +158,47 @@ fun BlockerScreen(
         }
     }
 
-    fun classifyPackage(packageName: String): String {
-        val lower = packageName.lowercase()
-        return if (lower.contains("social") || 
-                   lower.contains("facebook") || 
-                   lower.contains("twitter") || 
-                   lower.contains("instagram") || 
-                   lower.contains("tiktok") || 
-                   lower.contains("youtube") || 
-                   lower.contains("netflix") || 
-                   lower.contains("game") || 
-                   lower.contains("reddit") || 
-                   lower.contains("snapchat")) {
-            "Distraction"
-        } else if (lower.contains("gmail") || 
-                   lower.contains("calendar") || 
-                   lower.contains("keep") || 
-                   lower.contains("notes") || 
-                   lower.contains("drive") || 
-                   lower.contains("docs")) {
-            "Productivity"
-        } else {
-            "Distraction"
-        }
-    }
-
     fun startSessionForMinutes(minutes: Int) {
         coroutineScope.launch {
-            val currentEndTime = if (minutes == -1) {
-                Long.MAX_VALUE
-            } else {
-                System.currentTimeMillis() + (minutes * 60 * 1000)
+            try {
+                val currentEndTime = if (minutes == -1) {
+                    Long.MAX_VALUE
+                } else {
+                    System.currentTimeMillis() + (minutes * 60 * 1000)
+                }
+                val existing = dao.getAppState(targetPackage)
+                val newRecord = (existing ?: AppState(packageName = targetPackage)).copy(
+                    isLockedOut = false,
+                    lockOutUntil = 0L,
+                    currentSessionEndTime = currentEndTime,
+                    openCount = (existing?.openCount ?: 0) + 1,
+                    totalAccessCount = (existing?.totalAccessCount ?: 0) + 1,
+                    lastInteractedTime = System.currentTimeMillis()
+                )
+                dao.insertAppState(newRecord)
+            } catch (e: Exception) {
+                Log.e("BlockerActivity", "Error starting session: ${e.message}", e)
             }
-            val newRecord = AppState(
-                packageName = targetPackage,
-                isLockedOut = false,
-                lockOutUntil = 0L,
-                currentSessionEndTime = currentEndTime
-            )
-            dao.insertAppState(newRecord)
+
+            // Launch the target application directly so the user goes straight to it!
+            try {
+                val pm = context.packageManager
+                val launchIntent = pm.getLaunchIntentForPackage(targetPackage)
+                if (launchIntent != null) {
+                    launchIntent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED
+                    context.startActivity(launchIntent)
+                }
+            } catch (e: Exception) {
+                // Fail gracefully if launch intent cannot be found/started
+            }
+
             onDismiss()
         }
     }
 
-    // Centered pop-up dialog in middle center of screen with translucent black overlay background
     Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.4f))
+        modifier = modifier
+            .background(Color.Black)
             .padding(24.dp),
         contentAlignment = Alignment.Center
     ) {
@@ -167,7 +214,6 @@ fun BlockerScreen(
             }
 
             BlockerState.SESSION_SETUP -> {
-                // Centered popup dialog card
                 Column(
                     modifier = Modifier
                         .fillMaxWidth(0.9f)
@@ -226,7 +272,6 @@ fun BlockerScreen(
 
                     Spacer(modifier = Modifier.height(20.dp))
 
-                    // Clean pre-defined minutes option buttons (no manual entry)
                     val durations = listOf(1, 2, 5, 10, -1)
                     durations.forEach { minutes ->
                         Button(
@@ -255,14 +300,7 @@ fun BlockerScreen(
                     Spacer(modifier = Modifier.height(16.dp))
 
                     OutlinedButton(
-                        onClick = {
-                            val homeIntent = Intent(Intent.ACTION_MAIN).apply {
-                                addCategory(Intent.CATEGORY_HOME)
-                                flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                            }
-                            context.startActivity(homeIntent)
-                            (context as? Activity)?.finish()
-                        },
+                        onClick = { recordDeferralAndExit() },
                         colors = ButtonDefaults.outlinedButtonColors(
                             contentColor = Color.White
                         ),
@@ -282,7 +320,6 @@ fun BlockerScreen(
             }
 
             BlockerState.LOCKOUT_EXTENSION -> {
-                // Centered lockout card
                 Column(
                     modifier = Modifier
                         .fillMaxWidth(0.9f)
@@ -333,7 +370,6 @@ fun BlockerScreen(
                     val isPenaltyOver = penaltySecondsLeft == 0
 
                     if (!isPenaltyOver) {
-                        // Penalty countdown in progress: show ONLY the ticking countdown, hide extend options
                         Text(
                             text = "PENALTY UNTIL EXTEND AVAILABLE",
                             color = Color.Gray,
@@ -355,7 +391,6 @@ fun BlockerScreen(
 
                         Spacer(modifier = Modifier.height(28.dp))
                     } else {
-                        // Penalty finished: display pre-configured minutes selection options to extend session
                         Text(
                             text = "SELECT EXTENSION TIME",
                             color = Color.White,
@@ -395,16 +430,8 @@ fun BlockerScreen(
                         Spacer(modifier = Modifier.height(16.dp))
                     }
 
-                    // Exit button is always accessible to return to home
                     OutlinedButton(
-                        onClick = {
-                            val homeIntent = Intent(Intent.ACTION_MAIN).apply {
-                                addCategory(Intent.CATEGORY_HOME)
-                                flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                            }
-                            context.startActivity(homeIntent)
-                            (context as? Activity)?.finish()
-                        },
+                        onClick = { recordDeferralAndExit() },
                         colors = ButtonDefaults.outlinedButtonColors(
                             contentColor = Color.White
                         ),
@@ -424,4 +451,13 @@ fun BlockerScreen(
             }
         }
     }
+}
+
+private fun android.content.Context.findActivity(): Activity? {
+    var ctx = this
+    while (ctx is android.content.ContextWrapper) {
+        if (ctx is Activity) return ctx
+        ctx = ctx.baseContext
+    }
+    return null
 }

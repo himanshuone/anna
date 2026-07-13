@@ -11,23 +11,20 @@ data class AppState(
     @PrimaryKey val packageName: String,
     val isLockedOut: Boolean = false,
     val lockOutUntil: Long = 0L,
-    val currentSessionEndTime: Long = 0L
+    val currentSessionEndTime: Long = 0L,
+    val openCount: Int = 0,
+    val deferralCount: Int = 0,
+    val totalAccessCount: Int = 0,
+    val lastInteractedTime: Long = 0L,
+    val isHidden: Boolean = false,
+    val folderName: String? = null
 )
 
-@Entity(tableName = "weekly_logs")
-data class WeeklyLog(
-    @PrimaryKey(autoGenerate = true) val id: Long = 0,
-    val packageName: String,
-    val timestamp: Long,
-    val durationMinutes: Int,
-    val category: String
-)
-
-@Entity(tableName = "weekly_reports")
-data class WeeklyReport(
-    @PrimaryKey val weekIdentifier: String,
-    val reportText: String,
-    val timestamp: Long
+@Entity(tableName = "user_stats")
+data class UserStats(
+    @PrimaryKey val id: String = "global",
+    val dailyStreak: Int = 0,
+    val lastActiveDate: String = ""
 )
 
 // --- DAO ---
@@ -48,34 +45,30 @@ interface AppDao {
 
     @Query("SELECT * FROM app_states")
     suspend fun getAllAppStates(): List<AppState>
+}
 
-    // Weekly Logs
+@Dao
+interface UserStatsDao {
+    @Query("SELECT * FROM user_stats WHERE id = 'global' LIMIT 1")
+    suspend fun getUserStats(): UserStats?
+
+    @Query("SELECT * FROM user_stats WHERE id = 'global' LIMIT 1")
+    fun getUserStatsFlow(): Flow<UserStats?>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertWeeklyLog(log: WeeklyLog)
-
-    @Query("SELECT * FROM weekly_logs WHERE timestamp >= :sinceTimestamp ORDER BY timestamp DESC")
-    suspend fun getLogsSince(sinceTimestamp: Long): List<WeeklyLog>
-
-    @Query("SELECT * FROM weekly_logs ORDER BY timestamp DESC")
-    fun getAllLogsFlow(): Flow<List<WeeklyLog>>
-
-    // Weekly Reports
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertWeeklyReport(report: WeeklyReport)
-
-    @Query("SELECT * FROM weekly_reports ORDER BY timestamp DESC")
-    fun getAllWeeklyReportsFlow(): Flow<List<WeeklyReport>>
+    suspend fun insertUserStats(userStats: UserStats)
 }
 
 // --- DATABASE ---
 
 @Database(
-    entities = [AppState::class, WeeklyLog::class, WeeklyReport::class],
-    version = 1,
+    entities = [AppState::class, UserStats::class],
+    version = 3,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun appDao(): AppDao
+    abstract fun userStatsDao(): UserStatsDao
 
     companion object {
         @Volatile
@@ -110,25 +103,5 @@ class AppRepository(private val appDao: AppDao) {
 
     suspend fun insertAppState(appState: AppState) {
         appDao.insertAppState(appState)
-    }
-
-    suspend fun insertWeeklyLog(log: WeeklyLog) {
-        appDao.insertWeeklyLog(log)
-    }
-
-    suspend fun getLogsSince(sinceTimestamp: Long): List<WeeklyLog> {
-        return appDao.getLogsSince(sinceTimestamp)
-    }
-
-    fun getAllLogsFlow(): Flow<List<WeeklyLog>> {
-        return appDao.getAllLogsFlow()
-    }
-
-    suspend fun insertWeeklyReport(report: WeeklyReport) {
-        appDao.insertWeeklyReport(report)
-    }
-
-    fun getAllWeeklyReportsFlow(): Flow<List<WeeklyReport>> {
-        return appDao.getAllWeeklyReportsFlow()
     }
 }

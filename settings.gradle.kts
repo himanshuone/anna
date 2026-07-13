@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "Intent Gate"
+rootProject.name = "Phone Detox"
 
 include(":app")

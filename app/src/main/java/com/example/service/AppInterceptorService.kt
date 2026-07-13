@@ -25,30 +25,46 @@ class AppInterceptorService : AccessibilityService() {
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             val packageName = event.packageName?.toString() ?: return
 
-            if (packageName.isBlank() || isWhitelisted(packageName)) {
+            if (packageName.isBlank() || packageName == this.packageName || isWhitelisted(packageName)) {
+                return
+            }
+
+            val pm = getSystemService(android.content.Context.POWER_SERVICE) as? android.os.PowerManager
+            if (pm != null && !pm.isInteractive) {
+                Log.d("AppInterceptorService", "Screen is off. Skipping intercept.")
+                return
+            }
+
+            val km = getSystemService(android.content.Context.KEYGUARD_SERVICE) as? android.app.KeyguardManager
+            if (km != null && km.isKeyguardLocked) {
+                Log.d("AppInterceptorService", "Device is locked. Skipping intercept.")
                 return
             }
 
             Log.d("AppInterceptorService", "Foreground app changed to: $packageName")
 
             serviceScope.launch {
-                val db = AppDatabase.getDatabase(applicationContext)
-                val state = db.appDao().getAppState(packageName)
-                val currentTime = System.currentTimeMillis()
+                try {
+                    val db = AppDatabase.getDatabase(applicationContext)
+                    val state = db.appDao().getAppState(packageName)
+                    val currentTime = System.currentTimeMillis()
 
-                val needBlock = if (state == null) {
-                    true
-                } else {
-                    state.isLockedOut || state.lockOutUntil > currentTime || state.currentSessionEndTime < currentTime
-                }
-
-                if (needBlock) {
-                    Log.d("AppInterceptorService", "Blocking app: $packageName")
-                    val intent = Intent(applicationContext, BlockerActivity::class.java).apply {
-                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
-                        putExtra("TARGET_PACKAGE", packageName)
+                    val needBlock = if (state == null) {
+                        true
+                    } else {
+                        state.isLockedOut || state.lockOutUntil > currentTime || state.currentSessionEndTime < currentTime
                     }
-                    startActivity(intent)
+
+                    if (needBlock) {
+                        Log.d("AppInterceptorService", "Blocking app: $packageName")
+                        val intent = Intent(applicationContext, BlockerActivity::class.java).apply {
+                            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                            putExtra("TARGET_PACKAGE", packageName)
+                        }
+                        startActivity(intent)
+                    }
+                } catch (e: Exception) {
+                    Log.e("AppInterceptorService", "Error in background intercept check: ${e.message}", e)
                 }
             }
         }
@@ -58,13 +74,23 @@ class AppInterceptorService : AccessibilityService() {
         Log.d("AppInterceptorService", "Service interrupted")
     }
 
+    override fun onServiceConnected() {
+        super.onServiceConnected()
+        instance = this
+        Log.d("AppInterceptorService", "Service connected")
+    }
+
     override fun onDestroy() {
         super.onDestroy()
+        instance = null
         serviceScope.cancel()
         Log.d("AppInterceptorService", "Service destroyed")
     }
 
     companion object {
+        @Volatile
+        var instance: AppInterceptorService? = null
+
         fun isWhitelisted(packageName: String): Boolean {
             val whitelist = setOf(
                 "com.android.settings",
@@ -75,7 +101,8 @@ class AppInterceptorService : AccessibilityService() {
                 "com.sec.android.app.clockpackage",
                 "com.huawei.deskclock",
                 "com.example", // MainActivity package
-                "com.aistudio.intentgate.uqbyxv" // app package
+                "com.aistudio.phonedetox.uqbyxv", // app package
+                "com.google.android.apps.bard" // Gemini
             )
 
             if (packageName in whitelist) return true
@@ -88,10 +115,28 @@ class AppInterceptorService : AccessibilityService() {
                    lower.contains("clock") ||
                    lower.contains("phone") ||
                    lower.contains("aistudio") ||
+                   lower.contains("gemini") ||
+                   lower.contains("bard") ||
                    lower.contains("systemui") ||
                    lower.contains("permissioncontroller") ||
                    lower.contains("packageinstaller") ||
                    lower.contains("setupwizard") ||
+                   lower.contains("biometric") ||
+                   lower.contains("fingerprint") ||
+                   lower.contains("faceid") ||
+                   lower.contains("face") ||
+                   lower.contains("facelock") ||
+                   lower.contains("keyguard") ||
+                   lower.contains("trustagent") ||
+                   lower.contains("security") ||
+                   lower.contains("lockscreen") ||
+                   lower.contains("pattern") ||
+                   lower.contains("pin") ||
+                   lower.contains("password") ||
+                   lower.contains("smartlock") ||
+                   lower.contains("credentials") ||
+                   lower.contains("authenticator") ||
+                   lower.contains("gms") ||
                    packageName == "android" ||
                    lower.contains("launcher") // Don't block the system launcher/home screen
         }
